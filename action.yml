@@ -1,0 +1,143 @@
+name: 'nitpix'
+description: >-
+  Visual diff for CI: compares snapshot PNGs against baselines stored on an
+  orphan git branch, posts a PR review comment with before/after/diff images,
+  and manages a commit status that flips green on "/nitpix approve".
+author: 'Plotly'
+branding:
+  icon: 'eye'
+  color: 'purple'
+
+inputs:
+  snapshots-dir:
+    description: 'Directory containing the snapshot PNGs captured by the test run'
+    required: false
+    default: 'nitpix-snapshots'
+  artifact-pattern:
+    description: >-
+      Glob of artifacts to download and merge into snapshots-dir (for sharded
+      test matrices that uploaded via nitpix/upload). Set to '' if the
+      snapshots were captured in this same job.
+    required: false
+    default: 'nitpix-snapshots-*'
+  mode:
+    description: >-
+      'diff' (compare against baselines, report on the PR), 'promote' (make
+      this run's snapshots the new baselines for the current branch), or
+      'auto' (diff on pull_request events, promote otherwise).
+    required: false
+    default: 'auto'
+  base:
+    description: >-
+      Branch whose baselines to compare against (diff mode) or update
+      (promote mode). Defaults to the PR base branch / the pushed branch.
+    required: false
+    default: ''
+  baseline-branch:
+    description: 'Orphan branch storing baselines, pending images and approvals'
+    required: false
+    default: 'nitpix'
+  threshold:
+    description: 'odiff per-pixel color difference threshold (0-1, lower is stricter)'
+    required: false
+    default: '0.1'
+  antialiasing:
+    description: 'Ignore anti-aliased pixels when diffing'
+    required: false
+    default: 'true'
+  fail-on-new:
+    description: 'Require approval for brand-new snapshots (no baseline yet)'
+    required: false
+    default: 'false'
+  fail-on-missing:
+    description: 'Require approval when a baseline snapshot was not captured this run'
+    required: false
+    default: 'false'
+  fail-on-change:
+    description: >-
+      Also fail this step when unapproved changes exist. Off by default: the
+      commit status (status-context) carries the pass/fail signal so that
+      approving does not require re-running the test matrix.
+    required: false
+    default: 'false'
+  comment:
+    description: 'Post/update the PR review comment'
+    required: false
+    default: 'true'
+  max-comment-images:
+    description: 'Maximum number of snapshots rendered with inline images in the PR comment'
+    required: false
+    default: '20'
+  status-context:
+    description: 'Commit status context name (make this a required check)'
+    required: false
+    default: 'nitpix/visual'
+  command-prefix:
+    description: 'Slash-command prefix used in the PR comment instructions'
+    required: false
+    default: '/nitpix'
+  github-token:
+    description: 'Token with contents:write, pull-requests:write and statuses:write'
+    required: false
+    default: ${{ github.token }}
+  odiff-version:
+    description: 'odiff-bin version to install'
+    required: false
+    default: '4.3.8'
+
+outputs:
+  status:
+    description: "'passed' | 'needs-approval' (diff mode) or 'promoted' | 'skipped' (promote mode)"
+    value: ${{ steps.run.outputs.status }}
+  changed-count:
+    description: 'Number of changed snapshots'
+    value: ${{ steps.run.outputs.changed-count }}
+  added-count:
+    description: 'Number of new snapshots'
+    value: ${{ steps.run.outputs.added-count }}
+  missing-count:
+    description: 'Number of baselines with no snapshot this run'
+    value: ${{ steps.run.outputs.missing-count }}
+  unapproved-count:
+    description: 'Number of snapshots still needing approval'
+    value: ${{ steps.run.outputs.unapproved-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Download snapshot artifacts
+      if: inputs.artifact-pattern != ''
+      uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ inputs.artifact-pattern }}
+        merge-multiple: true
+        path: ${{ inputs.snapshots-dir }}
+
+    - name: Install odiff
+      shell: bash
+      run: |
+        if [ ! -x "$RUNNER_TEMP/nitpix-odiff/node_modules/.bin/odiff" ]; then
+          npm install --prefix "$RUNNER_TEMP/nitpix-odiff" --no-save --no-audit --no-fund \
+            "odiff-bin@${{ inputs.odiff-version }}"
+        fi
+
+    - name: Diff and report
+      id: run
+      shell: bash
+      env:
+        NITPIX_ODIFF_DIR: ${{ runner.temp }}/nitpix-odiff
+        INPUT_SNAPSHOTS_DIR: ${{ inputs.snapshots-dir }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_BASELINE_BRANCH: ${{ inputs.baseline-branch }}
+        INPUT_THRESHOLD: ${{ inputs.threshold }}
+        INPUT_ANTIALIASING: ${{ inputs.antialiasing }}
+        INPUT_FAIL_ON_NEW: ${{ inputs.fail-on-new }}
+        INPUT_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        INPUT_FAIL_ON_CHANGE: ${{ inputs.fail-on-change }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_MAX_COMMENT_IMAGES: ${{ inputs.max-comment-images }}
+        INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
+        INPUT_COMMAND_PREFIX: ${{ inputs.command-prefix }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: node "${{ github.action_path }}/lib/main.js"

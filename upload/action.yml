@@ -1,0 +1,32 @@
+name: 'nitpix upload'
+description: >-
+  Upload a test shard's snapshot PNGs as an artifact using the naming
+  convention the main nitpix action downloads by default.
+author: 'Plotly'
+
+inputs:
+  name:
+    description: 'Unique shard identifier (e.g. "integration-1", "table")'
+    required: true
+  path:
+    description: 'Directory containing the snapshot PNGs'
+    required: false
+    default: 'nitpix-snapshots'
+  if-no-files-found:
+    description: 'Passed through to actions/upload-artifact (warn | error | ignore)'
+    required: false
+    default: 'warn'
+  retention-days:
+    description: 'Artifact retention in days'
+    required: false
+    default: '7'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/upload-artifact@v4
+      with:
+        name: nitpix-snapshots-${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}

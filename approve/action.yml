@@ -1,0 +1,45 @@
+name: 'nitpix approve'
+description: >-
+  Handle "/nitpix approve" PR comments: record approved snapshot hashes on the
+  baseline branch and flip the nitpix commit status to success. Use from a
+  workflow triggered by issue_comment (types: [created]).
+author: 'Plotly'
+
+inputs:
+  baseline-branch:
+    description: 'Orphan branch storing baselines, pending images and approvals'
+    required: false
+    default: 'nitpix'
+  status-context:
+    description: 'Commit status context name (must match the main nitpix action)'
+    required: false
+    default: 'nitpix/visual'
+  command-prefix:
+    description: 'Slash-command prefix to react to'
+    required: false
+    default: '/nitpix'
+  github-token:
+    description: 'Token with contents:write, pull-requests:write and statuses:write'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  status:
+    description: "'approved' | 'denied' | 'stale' | 'noop' | 'ignored'"
+    value: ${{ steps.run.outputs.status }}
+  approved-count:
+    description: 'Number of snapshots approved'
+    value: ${{ steps.run.outputs.approved-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Approve
+      id: run
+      shell: bash
+      env:
+        INPUT_BASELINE_BRANCH: ${{ inputs.baseline-branch }}
+        INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
+        INPUT_COMMAND_PREFIX: ${{ inputs.command-prefix }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: node "${{ github.action_path }}/../lib/approve.js"
