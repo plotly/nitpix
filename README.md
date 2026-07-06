@@ -22,14 +22,16 @@ Python + Selenium (dash), Node + Playwright, plotly.js image tests, etc.
 ## How it works
 
 ```
-your PR test jobs (sharded)        final job                 on merge to dev
-┌──────────────────────┐    ┌─────────────────────────┐   ┌─────────────────────┐
-│ tests write PNGs to  │    │ plotly/nitpix@v1        │   │ same action, mode=  │
-│ ./nitpix-snapshots   │───▶│  · download shards      │   │ auto → promote:     │
-│                      │    │  · odiff vs baselines/  │   │ snapshots become    │
-│ plotly/nitpix/upload │    │  · push pending imgs    │   │ baselines/dev/      │
-└──────────────────────┘    │  · PR comment + status  │   └─────────────────────┘
-                            └─────────────────────────┘
+test workflow (unprivileged —      nitpix workflow (workflow_run —
+works for forks & dependabot)      base-repo context, full token)
+┌──────────────────────┐    ┌────────────────────────────────────┐
+│ tests write PNGs to  │    │ plotly/nitpix@v1                   │
+│ ./nitpix-snapshots   │───▶│  PR run:   diff vs baselines/,     │
+│                      │    │            push imgs, comment,     │
+│ plotly/nitpix/upload │    │            set nitpix/visual       │
+│ (per shard)          │    │  push run: promote snapshots to    │
+└──────────────────────┘    │            baselines/<branch>/     │
+                            └────────────────────────────────────┘
                                        ▲
                      "/nitpix approve" comment (plotly/nitpix/approve)
                      records approved snapshot hashes → status green
@@ -95,38 +97,79 @@ def nitpix_snapshot(driver, name, widths=(1280,), min_height=1024):
     path: nitpix-snapshots
 ```
 
-### 3. Diff + report in a final job (replaces `percy build:finalize`)
+### 3. Diff + report (replaces `percy build:finalize`)
+
+**Recommended: a separate `workflow_run` workflow.** This is what makes nitpix
+work for **fork PRs and dependabot** — the cases where Percy silently skipped.
+`pull_request` runs from forks (and dependabot, which GitHub treats the same
+way) get a read-only token and no secrets, so they can never comment or set a
+status. The fix: the test workflow only *uploads* snapshots (needs no
+permissions), and a follow-up workflow — which always runs in the base repo
+with a full-privilege token — downloads them, diffs, comments, and sets the
+status. nitpix never checks out or executes PR code in this workflow, which is
+what makes the pattern safe.
+
+`.github/workflows/nitpix.yml`:
 
 ```yaml
-nitpix:
-  name: Visual review
-  runs-on: ubuntu-latest
-  needs: [test-integration, test-table, ...]   # all snapshot-producing jobs
-  if: always() && github.event.pull_request.head.repo.fork == false
-  permissions:
-    contents: write        # push to the baseline branch
-    pull-requests: write   # the report comment
-    statuses: write        # the nitpix/visual check
-  steps:
-    - uses: plotly/nitpix@v1
-      # defaults shown:
-      # with:
-      #   artifact-pattern: nitpix-snapshots-*
-      #   baseline-branch: nitpix
-      #   threshold: '0.1'
+name: nitpix
+on:
+  workflow_run:
+    workflows: [Tests]          # your test workflow's `name:`
+    types: [completed]
+
+permissions:
+  contents: write        # push to the baseline branch
+  pull-requests: write   # the report comment
+  statuses: write        # the nitpix/visual check
+
+jobs:
+  visual-review:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: plotly/nitpix@v1
+        # defaults shown:
+        # with:
+        #   artifact-pattern: nitpix-snapshots-*
+        #   baseline-branch: nitpix
+        #   threshold: '0.1'
 ```
 
-Run the same workflow on `push` to your target branches — the same action
-detects the event and **promotes** instead of diffing:
+The action reads the `workflow_run` payload: test runs triggered by a PR
+(same-repo, fork, or dependabot) are **diffed** — the PR is resolved by head
+sha when the payload omits it, as it does for forks — and test runs triggered
+by a `push` to a branch **promote** that branch's baselines. So make sure the
+test workflow runs on both:
 
 ```yaml
+# in your test workflow
 on:
   push:
-    branches: [dev, master]
+    branches: [dev, master]   # baseline-promoting branches
   pull_request:
 ```
 
 Finally, make `nitpix/visual` a required status check in branch protection.
+
+<details><summary>Alternative: single-workflow setup (same-repo PRs only)</summary>
+
+If you never take fork or dependabot PRs, you can skip the second workflow and
+append a job to the test workflow itself:
+
+```yaml
+nitpix:
+  runs-on: ubuntu-latest
+  needs: [test-integration, test-table]   # all snapshot-producing jobs
+  permissions:
+    contents: write
+    pull-requests: write
+    statuses: write
+  steps:
+    - uses: plotly/nitpix@v1
+```
+
+</details>
 
 ### 4. The approve command
 
@@ -175,10 +218,15 @@ Outputs: `status`, `changed-count`, `added-count`, `missing-count`,
 
 ## Notes & limitations
 
-- **Fork PRs**: the default token is read-only, so nitpix still diffs and
-  fails/passes (per `fail-on-change`) but can't push images, comment, or set
-  the status. Guard the job with a fork check (as above) or accept the
-  degraded report in the step summary.
+- **Fork PRs & dependabot**: fully supported via the `workflow_run` topology
+  above. If you instead run nitpix directly in a `pull_request` job, fork and
+  dependabot runs degrade gracefully (diff results in the step summary, no
+  comment/status) — but a required `nitpix/visual` check would then block
+  those PRs, so use `workflow_run` if you take them.
+- **Review the images, not just the diff**: snapshot artifacts from fork PRs
+  are attacker-supplied bytes. nitpix only ever copies them as `.png` files
+  onto the baseline branch and never executes anything from them, but the
+  human approving should look at what they're approving.
 - **Public repos only** for inline comment images —
   `raw.githubusercontent.com` doesn't serve private-repo content to browsers
   without auth. (Private-repo support would need an artifact-based HTML

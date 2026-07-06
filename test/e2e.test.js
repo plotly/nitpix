@@ -31,6 +31,10 @@ const STUBS = {
   'POST /repos/plotly/dash/issues/comments/5/reactions': {},
   'GET /repos/plotly/dash/collaborators/alice/permission': { permission: 'write' },
   'GET /repos/plotly/dash/collaborators/mallory/permission': { permission: 'read' },
+  // fork PRs: workflow_run.pull_requests is empty, PR is looked up by head sha
+  [`GET /repos/plotly/dash/commits/${HEAD_SHA}/pulls`]: [
+    { number: 42, state: 'open', head: { sha: HEAD_SHA }, base: { ref: 'dev' } },
+  ],
 };
 fs.writeFileSync(stubsFile, JSON.stringify(STUBS));
 
@@ -233,6 +237,52 @@ test('diff: pushing NEW pixels after approval goes red again', () => {
   });
   assert.equal(outputs.status, 'needs-approval');
   assert.equal(outputs['unapproved-count'], '1');
+});
+
+test('diff via workflow_run: fork PR is resolved by head sha and fully reported', () => {
+  // Same PR state as the previous test (a.png diverged again after approval),
+  // but delivered through the fork/dependabot-safe workflow_run topology
+  // where pull_requests[] is empty in the payload.
+  writeSnapshots({ 'a.png': GREEN, 'b.png': BLUE, 'd.png': YELLOW });
+  const { outputs, calls } = run('main.js', {
+    eventName: 'workflow_run',
+    event: {
+      workflow_run: {
+        id: 12345,
+        event: 'pull_request',
+        head_sha: HEAD_SHA,
+        head_branch: 'feature',
+        pull_requests: [],
+      },
+    },
+  });
+  assert.equal(outputs.status, 'needs-approval');
+  assert.equal(outputs['unapproved-count'], '1');
+  // PR was looked up via the commits/<sha>/pulls API
+  assert.ok(calls.some((c) => c.path === `/repos/plotly/dash/commits/${HEAD_SHA}/pulls`));
+  // status + comment posted against PR #42's head as usual
+  const status = calls.find((c) => c.method === 'POST' && c.path.includes('/statuses/'));
+  assert.ok(status.path.endsWith(`/statuses/${HEAD_SHA}`));
+  assert.equal(status.body.state, 'failure');
+});
+
+test('promote via workflow_run: push-triggered test run updates its branch baselines', () => {
+  writeSnapshots({ 'a.png': RED, 'b.png': BLUE });
+  const { outputs } = run('main.js', {
+    eventName: 'workflow_run',
+    event: {
+      workflow_run: {
+        id: 12346,
+        event: 'push',
+        head_sha: 'b'.repeat(40),
+        head_branch: 'master',
+        head_repository: { full_name: 'plotly/dash' },
+        pull_requests: [],
+      },
+    },
+  });
+  assert.equal(outputs.status, 'promoted');
+  assert.ok(baselineBranchFiles().includes('baselines/master/a.png'));
 });
 
 test('promote: merge to dev updates baselines and prunes closed-PR data', () => {

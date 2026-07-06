@@ -112,6 +112,10 @@ runs:
         pattern: ${{ inputs.artifact-pattern }}
         merge-multiple: true
         path: ${{ inputs.snapshots-dir }}
+        # On workflow_run events (the fork/dependabot-safe topology), pull the
+        # artifacts from the triggering test workflow's run.
+        run-id: ${{ github.event.workflow_run.id || github.run_id }}
+        github-token: ${{ inputs.github-token }}
 
     - name: Install odiff
       shell: bash
