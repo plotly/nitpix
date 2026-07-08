@@ -11,6 +11,7 @@
     "test": "node --test test/"
   },
   "devDependencies": {
-    "odiff-bin": "4.3.8"
+    "odiff-bin": "4.3.8",
+    "sharp": "^0.35.0"
   }
 }

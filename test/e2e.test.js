@@ -27,6 +27,7 @@ const STUBS = {
   'GET /repos/plotly/dash/pulls/42': { number: 42, head: { sha: HEAD_SHA }, base: { ref: 'dev' } },
   'GET /repos/plotly/dash/issues/42/comments?': [],
   'POST /repos/plotly/dash/issues/42/comments': { id: 1, html_url: 'https://example.com/comment' },
+  'PATCH /repos/plotly/dash/issues/comments/1': { id: 1, html_url: 'https://example.com/comment' },
   'POST /repos/plotly/dash/statuses/': {},
   'POST /repos/plotly/dash/issues/comments/5/reactions': {},
   'GET /repos/plotly/dash/collaborators/alice/permission': { permission: 'write' },
@@ -162,13 +163,16 @@ test('diff: PR with a changed, an added and a missing snapshot goes red', () => 
   assert.equal(outputs['missing-count'], '1');
   assert.equal(outputs['unapproved-count'], '1'); // only the change; fail-on-new defaults off
 
-  // pending images + manifest pushed to the baseline branch
+  // pending images, thumbnails and manifest pushed to the baseline branch
   const pending = `pending/pr-42/${HEAD_SHA.slice(0, 12)}`;
   const files = baselineBranchFiles();
   assert.ok(files.includes(`${pending}/new/a.png`));
   assert.ok(files.includes(`${pending}/diff/a.png`));
   assert.ok(files.includes(`${pending}/new/d.png`));
   assert.ok(files.includes(`${pending}/manifest.json`));
+  assert.ok(files.includes(`${pending}/thumb/baseline/a.png`));
+  assert.ok(files.includes(`${pending}/thumb/diff/a.png`));
+  assert.ok(files.includes(`${pending}/thumb/snapshot/d.png`));
 
   // commit status failure was posted for the head sha
   const status = calls.find((c) => c.method === 'POST' && c.path.includes('/statuses/'));
@@ -176,10 +180,16 @@ test('diff: PR with a changed, an added and a missing snapshot goes red', () => 
   assert.equal(status.body.state, 'failure');
   assert.equal(status.body.context, 'nitpix/visual');
 
-  // comment posted with the report
-  const comment = calls.find((c) => c.method === 'POST' && c.path.endsWith('/issues/42/comments'));
-  assert.ok(comment.body.body.includes('nitpix-report'));
-  assert.ok(comment.body.body.includes('a.png'));
+  // Email-safe comment flow: created with a links-only body (GitHub emails
+  // the creation body), then immediately edited to the full report with
+  // thumbnail images linking to the full-size files.
+  const created = calls.find((c) => c.method === 'POST' && c.path.endsWith('/issues/42/comments'));
+  assert.ok(created.body.body.includes('nitpix-report'));
+  assert.ok(!created.body.body.includes('<img'), 'creation body must not embed images');
+  assert.ok(created.body.body.includes('[diff]('), 'creation body links to images');
+  const edited = calls.find((c) => c.method === 'PATCH' && c.path.includes('/issues/comments/'));
+  assert.ok(edited.body.body.includes('/thumb/baseline/a.png'), 'full body embeds thumbnails');
+  assert.ok(edited.body.body.includes(`<a href="`), 'thumbnails link to full images');
   assert.ok(summary.includes('a.png'));
 });
 
@@ -283,6 +293,18 @@ test('promote via workflow_run: push-triggered test run updates its branch basel
   });
   assert.equal(outputs.status, 'promoted');
   assert.ok(baselineBranchFiles().includes('baselines/master/a.png'));
+});
+
+test('diff: image budget exhausted degrades rows to plain links', () => {
+  writeSnapshots({ 'a.png': GREEN, 'b.png': BLUE, 'd.png': YELLOW });
+  const { calls } = run('main.js', {
+    eventName: 'pull_request',
+    event: PR_EVENT,
+    inputs: { 'max-comment-images': '0' },
+  });
+  const edited = calls.find((c) => c.method === 'PATCH' && c.path.includes('/issues/comments/'));
+  assert.ok(!edited.body.body.includes('<img'), 'no inline images when budget is 0');
+  assert.ok(edited.body.body.includes('[baseline]('), 'changed rows degrade to links');
 });
 
 test('promote: merge to dev updates baselines and prunes closed-PR data', () => {

@@ -209,12 +209,27 @@ Only users with **write** access can approve; others get a 👎 reaction.
 | `fail-on-new` | `false` | new snapshots need approval too |
 | `fail-on-missing` | `false` | baselines not captured this run fail the check |
 | `fail-on-change` | `false` | also fail the step (the commit status is the primary signal) |
-| `comment` / `max-comment-images` | `true` / `20` | PR comment behavior |
+| `comment` / `max-comment-images` | `true` / `30` | PR comment behavior; the budget counts inline images (changed = 3, new = 1), worst diffs first, the rest degrade to links |
+| `thumbnail-width` | `360` | inline images are thumbnails linking to the full files; `0` embeds full-size |
 | `status-context` | `nitpix/visual` | the check name |
 | `github-token` | `github.token` | needs contents/PR/statuses write |
 
 Outputs: `status`, `changed-count`, `added-count`, `missing-count`,
 `unapproved-count`.
+
+### Comment weight
+
+GitHub loads every inline image in a comment at once (even inside closed
+`<details>`, and `width=` doesn't shrink the download), and notification
+emails carry the comment body as created. nitpix keeps reports light three
+ways:
+
+- inline images are **thumbnails** (`thumbnail-width`, default 360px)
+  hyperlinked to the full-size files;
+- a total **image budget** (`max-comment-images`) is spent on the worst
+  diffs first; snapshots beyond it render as `baseline · new · diff` links;
+- the comment is **created links-only and immediately edited** to the full
+  version — GitHub only emails on creation, so emails never embed images.
 
 ## Notes & limitations
 

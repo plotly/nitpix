@@ -65,9 +65,18 @@ inputs:
     required: false
     default: 'true'
   max-comment-images:
-    description: 'Maximum number of snapshots rendered with inline images in the PR comment'
+    description: >-
+      Maximum number of inline images embedded in the PR comment (a changed
+      snapshot costs 3, a new one costs 1; worst diffs first). Snapshots
+      beyond the budget degrade to baseline/new/diff links.
     required: false
-    default: '20'
+    default: '30'
+  thumbnail-width:
+    description: >-
+      Width of the thumbnails embedded in the PR comment (they link to the
+      full-size images). Set to '0' to embed full-size images instead.
+    required: false
+    default: '360'
   status-context:
     description: 'Commit status context name (make this a required check)'
     required: false
@@ -117,12 +126,12 @@ runs:
         run-id: ${{ github.event.workflow_run.id || github.run_id }}
         github-token: ${{ inputs.github-token }}
 
-    - name: Install odiff
+    - name: Install odiff and sharp
       shell: bash
       run: |
-        if [ ! -x "$RUNNER_TEMP/nitpix-odiff/node_modules/.bin/odiff" ]; then
+        if [ ! -d "$RUNNER_TEMP/nitpix-odiff/node_modules/odiff-bin" ] || [ ! -d "$RUNNER_TEMP/nitpix-odiff/node_modules/sharp" ]; then
           npm install --prefix "$RUNNER_TEMP/nitpix-odiff" --no-save --no-audit --no-fund \
-            "odiff-bin@${{ inputs.odiff-version }}"
+            "odiff-bin@${{ inputs.odiff-version }}" "sharp@^0.35.0"
         fi
 
     - name: Diff and report
@@ -141,6 +150,7 @@ runs:
         INPUT_FAIL_ON_CHANGE: ${{ inputs.fail-on-change }}
         INPUT_COMMENT: ${{ inputs.comment }}
         INPUT_MAX_COMMENT_IMAGES: ${{ inputs.max-comment-images }}
+        INPUT_THUMBNAIL_WIDTH: ${{ inputs.thumbnail-width }}
         INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
         INPUT_COMMAND_PREFIX: ${{ inputs.command-prefix }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
